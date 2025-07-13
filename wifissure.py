@@ -1,13 +1,18 @@
 import argparse
 import logging
+import threading
 import subprocess
+import tempfile
 import time
 import os
+import re
+import signal
 from pathlib import Path
 from typing import Optional
 import pty
 import subprocess
 import select
+import sys
 
 def kill_conflicting_processes():
     subprocess.run(["sudo", "airmon-ng", "check", "kill"], capture_output=True, text=True, check=True)
