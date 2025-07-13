@@ -34,10 +34,6 @@ def enable_monitor_mode(iface: str) -> str:
     print(result);
 
 def find_bssid(essid: str, iface: str = "wlan0mon", timeout: Optional[int] = None) -> Optional[str]:
-    print(f"Looking for ESSID: {essid}")
-    print(f"Interface: {iface}")
-    print(f"Timeout: {timeout if timeout else 'No timeout'} seconds")
-
     master_fd, slave_fd = pty.openpty()
 
     process = subprocess.Popen(
@@ -54,10 +50,12 @@ def find_bssid(essid: str, iface: str = "wlan0mon", timeout: Optional[int] = Non
 
     try:
         while process.poll() is None:
+            # check whether we've timed out
             if timeout and (time.time() - start_time) > timeout:
                 print("\nTimeout reached. Stopping scan.")
                 break
 
+            # if we get here, we haven't timed out
             ready, _, _ = select.select([master_fd], [], [], 0.5)
             if ready:
                 chunk = os.read(master_fd, 4096).decode(errors="replace")
@@ -74,9 +72,6 @@ def find_bssid(essid: str, iface: str = "wlan0mon", timeout: Optional[int] = Non
                             bssid_candidate = parts[0]
                             if ":" in bssid_candidate and len(bssid_candidate) == 17:
                                 print(f"\nFound ESSID '{essid}' with BSSID: {bssid_candidate}")
-                                process.terminate()
-                                process.wait()
-                                os.close(master_fd)
                                 return bssid_candidate
                 # Prevent buffer from growing too big
                 if len(buffer) > 100000:
@@ -93,6 +88,10 @@ def find_bssid(essid: str, iface: str = "wlan0mon", timeout: Optional[int] = Non
 
     print("ESSID not found.")
     return None
+
+def send_deauth_packets(bssid: str):
+
+    return;
 
 def main():
     # Create argument parser
@@ -115,7 +114,13 @@ def main():
 
     kill_conflicting_processes()
     enable_monitor_mode(args.interface)
-    find_bssid(args.target, args.interface, 20)
+    bssid = find_bssid(args.target, args.interface, 20)
+    
+    if bssid:
+        print(f"✓ Got BSSID {bssid}; now I can continue…")
+        send_deauth_packets(bssid)
+    else:
+        print("✗ Network not seen — decide what to do next.")
 
 if __name__ == "__main__":
     logging.basicConfig(
