@@ -2,18 +2,11 @@ import argparse
 import logging
 import threading
 import subprocess
-import tempfile
 import time
 import os
-import re
 import signal
 from pathlib import Path
-from typing import Optional
-import pty
-import select
-import sys
 import glob
-from typing import Optional, Dict, Any
 import csv
 
 def get_latest_output_file(basename: str) -> str | None:
@@ -66,7 +59,6 @@ def send_deauths(aireplay_args, stop_event, channel):
         "sudo", "aireplay-ng", "--deauth", str(aireplay_args["deauths"]),
         "-a", aireplay_args["BSSID"], aireplay_args["interface"]
     ]
-
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     while not stop_event.is_set():
