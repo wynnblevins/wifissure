@@ -133,7 +133,8 @@ def find_network_info_by_essid(essid: str, interface: str = "wlan0mon", timeout:
                         continue
 
                     # ESSID is typically last column
-                    row_essid = row[13].strip()
+                    ESSID_COL = 13
+                    row_essid = row[ESSID_COL].strip()
                     if row_essid == essid:
                         # Map header names to values (hardcoded columns per airodump-ng CSV format)
                         keys = [
