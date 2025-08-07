@@ -5,5 +5,5 @@ Wifissure is a python script which can be used to crack wifi passwords.  DISCLAI
 You'll need a wireless adapter that supports monitor mode.  
 
 ## Usage
-From within the root of the project directory, run the following.  Replace "My Network" with the name of the target network to crack, the name of the cap file you want to generate, and your wireless interface.  
-`./wifissure --target "My Network" --capfile network --interface wlan0`
+From within the root of the project directory, run the following.  Replace "My Network" with the name of the target network to crack, the name of the cap file you want to generate, and your wireless interface along with a path to a wordlist file to use.  
+`./wifissure --target "My Network" --capfile network --interface wlan0 --wordlist /usr/share/wordlists/rockyou.txt`
