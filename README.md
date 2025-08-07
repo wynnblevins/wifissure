@@ -1,5 +1,5 @@
 # Wifissure
-Wifissure is a python script which can be used to crack wifi passwords.  DISCLAIMER... don't use my script to crack wifi networks the you don't have permission to access.  I'll not be held responsible for your nefarious script kiddie ways.
+Wifissure is a python script which can be used to crack wifi passwords.  DISCLAIMER... don't use my script to crack wifi networks you don't have permission to access.  I'll not be held responsible for your nefarious script kiddie ways.
 
 ## Prerequisites and Set Up
 You'll need a wireless adapter that supports monitor mode.
