@@ -11,6 +11,8 @@ from pathlib import Path
 import glob
 import csv
 
+DEFAULT_WORDLIST = "/usr/share/wordlists/rockyou.txt"
+
 def print_program_args(args):
     # Log what we're doing
     logging.info("target: %s", args.target)
@@ -32,7 +34,7 @@ def get_latest_output_file(basename: str) -> str | None:
     latest_file = max(files, key=os.path.getctime)
     return latest_file
 
-def run_aircrack(capfile: str) -> subprocess.CompletedProcess:
+def run_aircrack(capfile: str, wordlist: str = DEFAULT_WORDLIST) -> subprocess.CompletedProcess:
     logging.info("running aircrack-ng")
 
     full_capfile_name = get_latest_output_file(capfile)
@@ -40,8 +42,11 @@ def run_aircrack(capfile: str) -> subprocess.CompletedProcess:
         logging.error("Could not find capture file matching '{capfile}'")
         return subprocess.CompletedProcess(args=[], returncode=1)
 
+    if wordlist == None:
+        wordlist = DEFAULT_WORDLIST
+
     # TODO: make it so the path to the word list is a command line arg, if not provided default to rockyou.txt
-    cmd = ["sudo", "aircrack-ng", full_capfile_name, "-w", "/usr/share/wordlists/rockyou.txt"]
+    cmd = ["sudo", "aircrack-ng", full_capfile_name, "-w", wordlist]
 
     return subprocess.run(cmd, check=True)
 
@@ -191,7 +196,8 @@ def main():
     parser.add_argument("--target", required=True, help="Target network ESSID (e.g., 'MyWiFi')")
     parser.add_argument("--interface", required=True, help="Wireless interface in monitor mode (e.g., wlan0mon)")
     parser.add_argument("--capfile", required=True, help="Output capture file prefix (e.g., 'output-file')")
-
+    parser.add_argument("--wordlist", required=False, help="The path to a wordlist file, defaults to /usr/share/wordlists/rockyou.txt")
+    
     # Parse the arguments and log what we're doing
     args = parser.parse_args()
     print_program_args(args)
@@ -227,7 +233,7 @@ def main():
         deauth_thread.join()
         airodump_thread.join()
 
-        output = run_aircrack(args.capfile)
+        output = run_aircrack(args.capfile, args.wordlist)
         logging.info(output)
 
         logging.info("program complete")
